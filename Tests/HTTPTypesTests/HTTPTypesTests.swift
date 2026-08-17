@@ -165,6 +165,31 @@ extension HTTPField.Name {
         #expect(fields([(a, "1"), (a, "1"), (b, "2")]) != fields([(a, "1"), (b, "2"), (b, "2")]))
     }
 
+    /// While `==` walks the two lists, the fields it has set aside on one side can briefly outnumber
+    /// those on the other: here the second "a" is set aside before the first one is paired off, so
+    /// one side holds two and the other one. This is the case to reach for when changing how those
+    /// set aside fields are counted.
+    @Test func equalityWhenOneSideBrieflyHoldsMoreSetAsideFields() {
+        let a = HTTPField.Name("a")!
+        let b = HTTPField.Name("b")!
+        let c = HTTPField.Name("c")!
+        let d = HTTPField.Name("d")!
+        func fields(_ pairs: [(HTTPField.Name, String)]) -> HTTPFields {
+            var fields = HTTPFields()
+            for (name, value) in pairs {
+                fields.append(HTTPField(name: name, value: value))
+            }
+            return fields
+        }
+
+        let straight = fields([(a, "1"), (b, "2"), (c, "3"), (a, "4"), (d, "5")])
+        #expect(straight == fields([(b, "2"), (c, "3"), (d, "5"), (a, "1"), (a, "4")]))
+
+        // The same reordering with the two "a" fields swapped, which is not equal: the relative
+        // order of the fields sharing a name is the one thing that has to match.
+        #expect(straight != fields([(b, "2"), (c, "3"), (d, "5"), (a, "4"), (a, "1")]))
+    }
+
     /// `equalAlternative(to:)` is a second implementation of the same question, so it has to give
     /// the same answer as `==` on every case that distinguishes them.
     @Test func equalAlternativeAgreesWithEquality() {

@@ -177,48 +177,72 @@ public struct HTTPFields: Sendable {
 extension HTTPFields: Equatable {
     public static func == (lhs: HTTPFields, rhs: HTTPFields) -> Bool {
         // Two field lists are equal when, for every name, they hold the same fields in the same
-        // order. Fields with different names may be interleaved differently, so the two lists are
-        // walked in lock step and only the fields that do not line up are set aside, each waiting
-        // for the other list to produce the next field of its name.
+        // order. Fields with different names may be interleaved differently.
+
+        // Note:
+        // Within the code comments here, the following names are used:
+        //  `Element` -> a `HTTPField` inside the `HTTPFields`
+        //  `Fields` -> a `HTTPFields`
+
+        // When checking for equality we try two approaches:
+        //  1. We walk both fields' elements in lock-step. To support ordering differences within the
+        //     fields, we use `pending` arrays, to store elements that have not appeared in the other.
+        //     This approach is very fast if the two candidates have mostly the same order, however
+        //     if the orders are vastly different, this approach can scale quadratic. Because of this,
+        //     if the `pending` arrays grows to large (>= `maxFieldsToScan`) and there are enough fields
+        //     remaining (>=`minFieldsToIndexByName`), we will stop the lockstep approach and instead
+        //     fallback to:
+        //  2. An approach in which we build a dictionary from one field list and then remove items
+        //     from it based on the other one. This scales linear but has significant build costs.
+
+        // Super early exit if lengths don't align:
         if lhs.fields.count != rhs.fields.count {
             return false
         }
-        // The positions of the fields on either side whose partner on the other side has not
-        // turned up yet. Positions rather than the fields themselves, so that setting one aside
-        // does not retain its name and value. Both stay empty for as long as the two lists agree,
-        // which is the usual case, so comparing two lists in the same order does not allocate.
-        //
-        // Each pass below either sets one field aside or pairs one off on each side, so the two
-        // hold the same number of fields once a pass finishes, and one of them being empty means
-        // both are.
+
+        // The index of the fields on either side whose equivalent on the other side has not
+        // turned up yet. Indexes are stored instead of fields, as this reduces ARC traffic.
+        // Both arrays remain empty for as long as the two fields hold the same elements in exactly
+        // the same order. After each iteration both arrays have the same length.
         var pendingLeft = [Int]()
         var pendingRight = [Int]()
         for index in lhs.fields.indices {
+            // A direct element comparison can only be done if there are no elements in the pending
+            // arrays. This because to ensure correct ordering, all the other sides' unpaired
+            // elements have to be considered before the current element of the other side can be
+            // considered.
             if pendingLeft.isEmpty {
+                // if the left and right element are equal we can check the next elements.
                 if lhs.fields[index] == rhs.fields[index] {
-                    // Neither side is owed a field, so these two are each other's partner.
                     continue
                 }
+                // if the elements' names are equal but the elements are unequal, the elements must
+                // have different values -> early exit, as the http fields will be unequal.
                 if lhs.fields[index].name == rhs.fields[index].name {
-                    // Same reasoning, so these two had to be equal and the lists are not.
                     return false
                 }
-                // About to set a field aside. Neither side can set aside more than one field per
-                // position it has left, so reserving that much now is enough for the rest of the
-                // comparison and the two never have to grow.
+
+                // If the fields' names are unequal, we are dealing with different fields.
+                // that, we can compare them against later candidates. In order to reduce
+                // allocations, reserve array capacity first.
                 let remaining = lhs.fields.count - index
-                pendingLeft.reserveCapacity(remaining)
+                pendingLeft.reserveCapacity(Swift.min(remaining, Self.maxFieldsToScan))
                 pendingRight.reserveCapacity(remaining)
             }
-            // The n-th field of a name on one side can only ever pair with the n-th field of that
-            // name on the other, so a disagreement here settles the whole comparison.
+
             let leftName = lhs.fields[index].name
+            // search in the rhs' elements that haven't been paired up yet, for the current element.
+            // if it is found, check if the values are equal.
             if let match = pendingRight.firstIndex(where: { rhs.fields[$0].name == leftName }) {
+                // The n-th value for a name on one side can only ever pair with the n-th value of that
+                // same name on the other, so a disagreement means the order of values is different,
+                // which means the http fields are different.
                 if rhs.fields[pendingRight[match]] != lhs.fields[index] {
                     return false
                 }
                 pendingRight.remove(at: match)
             } else {
+                // no field with field name in the list of pending elements -> append
                 pendingLeft.append(index)
             }
             let rightName = rhs.fields[index].name
@@ -230,54 +254,47 @@ extension HTTPFields: Equatable {
             } else {
                 pendingRight.append(index)
             }
-            // Walking in lock step costs a scan of the fields set aside so far for every field it
-            // looks at, so on a list that is badly out of order it degrades towards quadratic. Past
-            // the point where that is the more expensive way to finish, start over and index one
-            // side by name instead, which is linear.
-            //
-            // Restarting rather than handing over the remainder throws away the work done so far.
-            // That work grows with the square of `maxFieldsOutOfStep` but not with the length of the
-            // lists, so it is a fixed cost on top of a linear comparison rather than a return to
-            // quadratic, which is the property worth having here.
-            if pendingLeft.count >= Self.maxFieldsOutOfStep,
+
+            if pendingLeft.count >= Self.maxFieldsToScan,
                 lhs.fields.count - index >= Self.minFieldsToIndexByName
             {
-                return lhs.isEqualByNameIndex(to: rhs)
+                return Self.isEqualByNameIndex(lhs, rhs)
             }
         }
         // Every field was either paired off or is still waiting for a partner that never came.
-        return pendingLeft.isEmpty && pendingRight.isEmpty
+        return pendingLeft.isEmpty
     }
 
-    /// How many fields `==` lets pile up out of step before it gives up on walking the two lists in
-    /// lock step. Low enough that the work it throws away when it does give up stays small, and high
-    /// enough that no plausible field list reaches it: a message would need this many distinctly
-    /// named fields all displaced at once, where real ones carry 16 to 30 distinct names in total.
-    private static var maxFieldsOutOfStep: Int { 32 }
+    /// How many fields may pile up set aside before `==` stops searching them by scanning and indexes
+    /// them by name instead. Set from measurement, and reached only by a list far more disordered than
+    /// a real message: it needs this many distinctly named fields displaced at once, where real
+    /// messages carry 16 to 30 distinct names in total.
+    private static var maxFieldsToScan: Int { 32 }
 
-    /// How much of the list has to be left for indexing it by name to be worth what the index costs
-    /// to build. Below this the lock step walk finishes sooner even when it is scanning a lot.
+    /// How much of the list has to be left for indexing the set aside fields to be worth what the
+    /// index costs to build. Below this, scanning finishes sooner even when it is scanning a lot.
     private static var minFieldsToIndexByName: Int { 64 }
 
     /// Answers the same question as `==` by indexing one side by name up front and then draining
     /// that index while walking the other.
     ///
     /// This is linear, but it hashes every name twice and allocates per name, which costs roughly two
-    /// orders of magnitude more per field than a lock step pass. So it is not the way to compare
-    /// two ordinary field lists, only the way out of the case the lock step walk is bad at, and
-    /// `==` falls back to it once it has established that it is in that case.
-    func isEqualByNameIndex(to other: HTTPFields) -> Bool {
-        if self.fields.count != other.fields.count {
+    /// orders of magnitude more per field than a lock step pass.
+    static func isEqualByNameIndex(_ lhs: HTTPFields, _ rhs: HTTPFields) -> Bool {
+        if lhs.fields.count != rhs.fields.count {
             return false
         }
-        // The fields of `other`, grouped by name. Fields sharing a name have to appear in the same
-        // order on both sides, so a group is a queue and not a set: each group is built back to
-        // front, which makes the earliest remaining field of a name the one `removeLast` returns.
-        var remaining = [String: [HTTPField]](minimumCapacity: self.fields.count)
-        for field in other.fields.reversed() {
+        // The fields of `rhs`, grouped by name. Fields sharing a name have to appear in the same
+        // order on both sides. Since we don't want to import swift-collection's Deque, we need
+        // another way to create a FiFo structure: By adding the fields to the dictionary in reverse
+        // order, we'll add later values first to the name array. This is great as it allows us,
+        // when iterating the lhs fields, to remove values from the end of the values array for a
+        // given name.
+        var remaining = [String: [HTTPField]](minimumCapacity: lhs.fields.count)
+        for field in rhs.fields.reversed() {
             remaining[field.name.canonicalName, default: []].append(field)
         }
-        for field in self.fields {
+        for field in lhs.fields {
             // One hash lookup, then the group is drained in place through its index.
             guard let group = remaining.index(forKey: field.name.canonicalName),
                 let candidate = remaining.values[group].last
@@ -298,7 +315,7 @@ extension HTTPFields: Equatable {
     /// Exposes ``isEqualByNameIndex(to:)`` so that the benchmarks can measure it directly against
     /// `==` instead of only through the case that makes `==` fall back to it. Not meant to ship.
     public func equalAlternative(to other: HTTPFields) -> Bool {
-        self.isEqualByNameIndex(to: other)
+        Self.isEqualByNameIndex(self, other)
     }
 }
 
