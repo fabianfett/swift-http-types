@@ -284,7 +284,7 @@ extension HTTPFields: Equatable {
         }
         // The fields of `rhs`, grouped by name. Fields sharing a name have to appear in the same
         // order on both sides. Since we don't want to import swift-collections' Deque, we need
-        // another way to create a FiFo structure: By adding the fields to the dictionary in reverse
+        // another way to create a FIFO structure: By adding the fields to the dictionary in reverse
         // order, we'll add later values first to the name array. This is great as it allows us,
         // when iterating the lhs fields, to remove values from the end of the values array for a
         // given name.
