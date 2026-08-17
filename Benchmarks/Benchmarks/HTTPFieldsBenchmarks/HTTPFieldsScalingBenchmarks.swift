@@ -166,6 +166,30 @@ func registerHTTPFieldsScalingBenchmarks() {
             }
         }
 
+        // MARK: Equality, dictionary based alternative
+
+        // `equalAlternative` answers the same question as `==` by indexing one side by name and
+        // draining that index, instead of walking both sides in lock step. Registered over exactly
+        // the pairs used above so the two can be read off against each other; the fixtures assert
+        // that they agree on every one of them.
+        let alternativePairs: [(String, FieldsPair)] = [
+            ("equal-sameOrder", equalSameOrder),
+            ("equal-differentOrder", equalDifferentOrder),
+            ("equal-locallyDisplaced", equalLocallyDisplaced),
+            ("differsAt80%-sameOrder", mismatchSameOrder),
+            ("differsAt80%-differentOrder", mismatchDifferentOrder),
+        ]
+        for (label, pair) in alternativePairs {
+            Benchmark(
+                "HTTPFields.equalAlternative-\(label)-N=\(n)",
+                configuration: makeDefaultConfiguration()
+            ) { benchmark in
+                for _ in benchmark.scaledIterations {
+                    blackHole(pair.lhs.equalAlternative(to: pair.rhs))
+                }
+            }
+        }
+
         // MARK: Building
 
         let sourceFields = scalingCase.fields
@@ -215,6 +239,34 @@ func registerHTTPFieldsScalingBenchmarks() {
                 var copy = fields
                 copy[scalingAbsentName] = "chunked"
                 blackHole(copy)
+            }
+        }
+    }
+
+    // MARK: - All distinct names, reversed
+
+    // Every field has a name of its own, so reversing the list displaces all of them. This is the
+    // one shape where indexing by name has a chance against the lock step walk, and it is not a
+    // shape real HTTP messages take — it is here to locate the crossover, not to be representative.
+    for distinctNameCase in distinctNameCases {
+        let n = distinctNameCase.n
+        let pair = distinctNameCase.sortedAgainstReversed
+
+        Benchmark(
+            "HTTPFields.==-equal-allDistinctNamesReversed-N=\(n)",
+            configuration: makeDefaultConfiguration()
+        ) { benchmark in
+            for _ in benchmark.scaledIterations {
+                blackHole(pair.lhs == pair.rhs)
+            }
+        }
+
+        Benchmark(
+            "HTTPFields.equalAlternative-equal-allDistinctNamesReversed-N=\(n)",
+            configuration: makeDefaultConfiguration()
+        ) { benchmark in
+            for _ in benchmark.scaledIterations {
+                blackHole(pair.lhs.equalAlternative(to: pair.rhs))
             }
         }
     }

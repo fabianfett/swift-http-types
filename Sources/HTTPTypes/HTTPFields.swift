@@ -230,9 +230,75 @@ extension HTTPFields: Equatable {
             } else {
                 pendingRight.append(index)
             }
+            // Walking in lock step costs a scan of the fields set aside so far for every field it
+            // looks at, so on a list that is badly out of order it degrades towards quadratic. Past
+            // the point where that is the more expensive way to finish, start over and index one
+            // side by name instead, which is linear.
+            //
+            // Restarting rather than handing over the remainder throws away the work done so far.
+            // That work grows with the square of `maxFieldsOutOfStep` but not with the length of the
+            // lists, so it is a fixed cost on top of a linear comparison rather than a return to
+            // quadratic, which is the property worth having here.
+            if pendingLeft.count >= Self.maxFieldsOutOfStep,
+                lhs.fields.count - index >= Self.minFieldsToIndexByName
+            {
+                return lhs.isEqualByNameIndex(to: rhs)
+            }
         }
         // Every field was either paired off or is still waiting for a partner that never came.
         return pendingLeft.isEmpty && pendingRight.isEmpty
+    }
+
+    /// How many fields `==` lets pile up out of step before it gives up on walking the two lists in
+    /// lock step. Low enough that the work it throws away when it does give up stays small, and high
+    /// enough that no plausible field list reaches it: a message would need this many distinctly
+    /// named fields all displaced at once, where real ones carry 16 to 30 distinct names in total.
+    private static var maxFieldsOutOfStep: Int { 32 }
+
+    /// How much of the list has to be left for indexing it by name to be worth what the index costs
+    /// to build. Below this the lock step walk finishes sooner even when it is scanning a lot.
+    private static var minFieldsToIndexByName: Int { 64 }
+
+    /// Answers the same question as `==` by indexing one side by name up front and then draining
+    /// that index while walking the other.
+    ///
+    /// This is linear, but it hashes every name twice and allocates per name, which costs roughly two
+    /// orders of magnitude more per field than a lock step pass. So it is not the way to compare
+    /// two ordinary field lists, only the way out of the case the lock step walk is bad at, and
+    /// `==` falls back to it once it has established that it is in that case.
+    func isEqualByNameIndex(to other: HTTPFields) -> Bool {
+        if self.fields.count != other.fields.count {
+            return false
+        }
+        // The fields of `other`, grouped by name. Fields sharing a name have to appear in the same
+        // order on both sides, so a group is a queue and not a set: each group is built back to
+        // front, which makes the earliest remaining field of a name the one `removeLast` returns.
+        var remaining = [String: [HTTPField]](minimumCapacity: self.fields.count)
+        for field in other.fields.reversed() {
+            remaining[field.name.canonicalName, default: []].append(field)
+        }
+        for field in self.fields {
+            // One hash lookup, then the group is drained in place through its index.
+            guard let group = remaining.index(forKey: field.name.canonicalName),
+                let candidate = remaining.values[group].last
+            else {
+                // `other` has no field of this name left to pair with this one.
+                return false
+            }
+            if candidate != field {
+                return false
+            }
+            remaining.values[group].removeLast()
+        }
+        // The groups held as many fields as this list has, and each of them just gave one up, so
+        // they are all drained and every field of `other` was paired off.
+        return true
+    }
+
+    /// Exposes ``isEqualByNameIndex(to:)`` so that the benchmarks can measure it directly against
+    /// `==` instead of only through the case that makes `==` fall back to it. Not meant to ship.
+    public func equalAlternative(to other: HTTPFields) -> Bool {
+        self.isEqualByNameIndex(to: other)
     }
 }
 

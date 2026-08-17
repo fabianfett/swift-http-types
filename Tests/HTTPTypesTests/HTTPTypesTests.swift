@@ -165,6 +165,80 @@ extension HTTPField.Name {
         #expect(fields([(a, "1"), (a, "1"), (b, "2")]) != fields([(a, "1"), (b, "2"), (b, "2")]))
     }
 
+    /// `equalAlternative(to:)` is a second implementation of the same question, so it has to give
+    /// the same answer as `==` on every case that distinguishes them.
+    @Test func equalAlternativeAgreesWithEquality() {
+        let a = HTTPField.Name("a")!
+        let b = HTTPField.Name("b")!
+        func fields(_ pairs: [(HTTPField.Name, String)]) -> HTTPFields {
+            var fields = HTTPFields()
+            for (name, value) in pairs {
+                fields.append(HTTPField(name: name, value: value))
+            }
+            return fields
+        }
+
+        let lists = [
+            [] as [(HTTPField.Name, String)],
+            [(a, "1")],
+            [(a, "1"), (b, "2")],
+            [(b, "2"), (a, "1")],
+            [(a, "1"), (a, "2")],
+            [(a, "2"), (a, "1")],
+            [(a, "1"), (b, "9"), (a, "1")],
+            [(a, "1"), (a, "1"), (b, "9")],
+            [(a, "1"), (a, "1"), (b, "2")],
+            [(a, "1"), (b, "2"), (b, "2")],
+            [(a, "1"), (b, "1"), (a, "2"), (b, "2")],
+            [(a, "1"), (a, "2"), (b, "1"), (b, "2")],
+            [(a, "2"), (a, "1"), (b, "1"), (b, "2")],
+        ].map(fields)
+
+        for lhs in lists {
+            for rhs in lists {
+                #expect(lhs.equalAlternative(to: rhs) == (lhs == rhs), "\(Array(lhs)) vs \(Array(rhs))")
+            }
+        }
+    }
+
+    /// Past a certain amount of disorder `==` stops walking the two lists in lock step and indexes
+    /// one of them by name instead. The lists here are long enough and reordered enough to cross
+    /// that point, which no other test in this file does.
+    @Test func equalityOfLongHeavilyReorderedLists() {
+        func fields(_ pairs: [(String, String)]) -> HTTPFields {
+            var fields = HTTPFields()
+            for (name, value) in pairs {
+                fields.append(HTTPField(name: HTTPField.Name(name)!, value: value))
+            }
+            return fields
+        }
+        let distinct = (1...128).map { ("n\($0)", "value\($0)") }
+
+        // All names distinct, so reversing cannot break the order of any name's fields.
+        #expect(fields(distinct) == fields(distinct.reversed()))
+        #expect(fields(distinct) == fields(distinct))
+
+        // One value differs, deep inside the reordered region.
+        var oneDiffers = distinct
+        oneDiffers[64] = (oneDiffers[64].0, "other")
+        #expect(fields(distinct) != fields(oneDiffers.reversed()))
+
+        // One name differs, so each list has a name the other does not.
+        var oneRenamed = distinct
+        oneRenamed[64] = ("other", oneRenamed[64].1)
+        #expect(fields(distinct) != fields(oneRenamed.reversed()))
+
+        // Repeated names in a long reordered list: the relative order of the repeats is what
+        // matters, and reversing the whole list inverts it.
+        let repeated = (1...128).map { ("n\($0 % 8)", "value\($0)") }
+        #expect(fields(repeated) == fields(repeated))
+        #expect(fields(repeated) != fields(repeated.reversed()))
+
+        // Same fields, but only the differently named ones move: every name's run keeps its order.
+        let grouped = (0..<8).flatMap { group in repeated.filter { $0.0 == "n\(group)" } }
+        #expect(fields(repeated) == fields(grouped))
+    }
+
     @Test func hashMatchesEqualityForSameOrder() {
         let fields1: HTTPFields = [
             .acceptEncoding: "br",
