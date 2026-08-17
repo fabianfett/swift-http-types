@@ -110,6 +110,29 @@ private func reorderingUniqueNames(_ fields: [HTTPField]) -> [HTTPField] {
     return fields.map { $0.name == .cookie ? $0 : reversed.next()! }
 }
 
+/// How far a locally displaced field moves. A small constant rather than a fraction of the list, so
+/// that the same absolute edit is made at every size and the curve over N shows how equality scales
+/// when the two lists are out of step by a bounded amount.
+private let localDisplacementDistance = 3
+
+/// Moves the first field a few slots later, leaving every other field where it was.
+///
+/// This is the realistic way two equal field lists come to be ordered differently: a proxy or a
+/// second encoder emits one header at a slightly different point in the list. `reorderingUniqueNames`
+/// is the opposite extreme, and the two bracket what equality has to cope with.
+///
+/// The field that moves has a name no other field in any of these lists shares, and it only jumps
+/// over fields with other names, so the relative order of same-named fields is untouched and the
+/// result is still equal to the input. Because the lists are nested, the fields involved are the same
+/// at every size.
+private func displacingOneField(_ fields: [HTTPField]) -> [HTTPField] {
+    precondition(fields.count > localDisplacementDistance, "list too short to displace a field within")
+    var fields = fields
+    let field = fields.removeFirst()
+    fields.insert(field, at: localDisplacementDistance)
+    return fields
+}
+
 /// The position of the one field that differs between the two sides of a "late mismatch" pair: 80%
 /// into the list, so that the leading 80% is identical.
 private func lateMismatchIndex(_ count: Int) -> Int {
@@ -143,6 +166,11 @@ struct ScalingCase: Sendable {
     let equalSameOrder: FieldsPair
     /// Equal, but with the uniquely named fields appended in the opposite order.
     let equalDifferentOrder: FieldsPair
+    /// Equal, but with one field appended a few slots away from where the other side has it. The
+    /// number of displaced fields does not grow with `n`, so an equality that only pays for the
+    /// fields that are actually out of step stays near-linear over this pair while
+    /// `equalDifferentOrder` does not.
+    let equalLocallyDisplaced: FieldsPair
     /// Unequal: the leading 80% is identical and in the same order, the field at 80% differs.
     ///
     /// Note what this does and does not pin down. It guarantees the shape — two field lists that
@@ -166,6 +194,10 @@ struct ScalingCase: Sendable {
         self.equalDifferentOrder = FieldsPair(
             lhs: makeFields(fields),
             rhs: makeFields(reorderingUniqueNames(fields))
+        )
+        self.equalLocallyDisplaced = FieldsPair(
+            lhs: makeFields(fields),
+            rhs: makeFields(displacingOneField(fields))
         )
         self.mismatchSameOrder = FieldsPair(lhs: makeFields(fields), rhs: makeFields(mismatched))
         self.mismatchDifferentOrder = FieldsPair(
@@ -212,6 +244,7 @@ func validateScalingFixtures() {
         let pairs = [
             ("equal, same order", scalingCase.equalSameOrder, true),
             ("equal, different order", scalingCase.equalDifferentOrder, true),
+            ("equal, locally displaced", scalingCase.equalLocallyDisplaced, true),
             ("differs at 80%, same order", scalingCase.mismatchSameOrder, false),
             ("differs at 80%, different order", scalingCase.mismatchDifferentOrder, false),
         ]
@@ -220,10 +253,29 @@ func validateScalingFixtures() {
             precondition((pair.lhs == pair.rhs) == expected, "N=\(n): \(description) is not \(expected)")
         }
 
-        let differentOrder = scalingCase.equalDifferentOrder
+        // A pair that is meant to be equal but differently ordered is worthless if it turns out to
+        // be in the same order after all, because then it measures the same thing as the same-order
+        // pair while claiming to measure the reordered case.
+        let reorderedPairs = [
+            ("equal, different order", scalingCase.equalDifferentOrder),
+            ("equal, locally displaced", scalingCase.equalLocallyDisplaced),
+        ]
+        for (description, pair) in reorderedPairs {
+            precondition(
+                n < 2 || !Array(pair.lhs).elementsEqual(pair.rhs),
+                "N=\(n): \(description) is actually in the same order"
+            )
+        }
+
+        // The locally displaced pair only measures what it claims to if exactly one field moved, and
+        // by the expected distance. Anything else and the "bounded displacement" curve is not that.
+        let displaced = scalingCase.equalLocallyDisplaced
+        let movedPositions = zip(Array(displaced.lhs), Array(displaced.rhs)).enumerated()
+            .filter { $0.element.0 != $0.element.1 }
+            .map(\.offset)
         precondition(
-            n < 2 || !Array(differentOrder.lhs).elementsEqual(differentOrder.rhs),
-            "N=\(n): equal, different order is actually in the same order"
+            movedPositions == Array(0...localDisplacementDistance),
+            "N=\(n): locally displaced pair disturbs \(movedPositions.count) positions, not \(localDisplacementDistance + 1)"
         )
     }
 }

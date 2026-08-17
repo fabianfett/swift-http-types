@@ -133,6 +133,38 @@ extension HTTPField.Name {
         #expect(fields1 != fields6)
     }
 
+    /// `==` walks the two field lists in lock step and sets aside the fields that do not line up.
+    /// These are the cases where the two sides diverge in the middle of a run of same-named
+    /// fields, so that a field has to be paired with one the other list produced at a different
+    /// position rather than with the one across from it.
+    @Test func equalityWhenSameNamedFieldsAreDisplaced() {
+        let a = HTTPField.Name("a")!
+        let b = HTTPField.Name("b")!
+        func fields(_ pairs: [(HTTPField.Name, String)]) -> HTTPFields {
+            var fields = HTTPFields()
+            for (name, value) in pairs {
+                fields.append(HTTPField(name: name, value: value))
+            }
+            return fields
+        }
+
+        // The leading "a" is identical on both sides, and the remaining "a" is on the far side of
+        // the reordered "b" in one of them.
+        let dupSplitByReorder = fields([(a, "1"), (b, "9"), (a, "1")])
+        #expect(dupSplitByReorder == fields([(a, "1"), (a, "1"), (b, "9")]))
+
+        let distinctValues = fields([(a, "1"), (b, "2"), (a, "3")])
+        #expect(distinctValues == fields([(a, "1"), (a, "3"), (b, "2")]))
+
+        // Same names and same total count, but the two "a" fields are swapped, and the relative
+        // order of same-named fields is significant.
+        #expect(fields([(a, "1"), (a, "2")]) != fields([(a, "2"), (a, "1")]))
+        #expect(fields([(a, "1"), (b, "1"), (a, "2")]) != fields([(a, "2"), (a, "1"), (b, "1")]))
+
+        // Equal counts, but one name's run is longer on one side than on the other.
+        #expect(fields([(a, "1"), (a, "1"), (b, "2")]) != fields([(a, "1"), (b, "2"), (b, "2")]))
+    }
+
     @Test func hashMatchesEqualityForSameOrder() {
         let fields1: HTTPFields = [
             .acceptEncoding: "br",

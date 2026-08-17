@@ -23,6 +23,8 @@ import HTTPTypes
 let defaultMetrics: [BenchmarkMetric] = [
     .mallocCountTotal,
     .instructions,
+    .retainCount,
+    .releaseCount
 ]
 
 func makeDefaultConfiguration(

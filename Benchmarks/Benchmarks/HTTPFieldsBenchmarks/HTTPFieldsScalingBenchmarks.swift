@@ -132,6 +132,20 @@ func registerHTTPFieldsScalingBenchmarks() {
             }
         }
 
+        // `equalDifferentOrder` reorders as much of the list as it can, which is the worst case.
+        // This one is the common case it has to be read against: the two lists agree everywhere
+        // except for a single field that sits a few slots off, and how many fields are out of step
+        // does not grow with N.
+        let equalLocallyDisplaced = scalingCase.equalLocallyDisplaced
+        Benchmark(
+            "HTTPFields.==-equal-locallyDisplaced-N=\(n)",
+            configuration: makeDefaultConfiguration()
+        ) { benchmark in
+            for _ in benchmark.scaledIterations {
+                blackHole(equalLocallyDisplaced.lhs == equalLocallyDisplaced.rhs)
+            }
+        }
+
         let mismatchSameOrder = scalingCase.mismatchSameOrder
         Benchmark(
             "HTTPFields.==-differsAt80%-sameOrder-N=\(n)",

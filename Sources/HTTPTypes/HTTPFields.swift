@@ -176,40 +176,63 @@ public struct HTTPFields: Sendable {
 
 extension HTTPFields: Equatable {
     public static func == (lhs: HTTPFields, rhs: HTTPFields) -> Bool {
-        // Two field lists are equal when, for every name, they hold the same fields in the
-        // same order. That implies an equal total field count, so checking it up front also
-        // proves that matching every name run of `lhs` leaves no unmatched field in `rhs`.
+        // Two field lists are equal when, for every name, they hold the same fields in the same
+        // order. Fields with different names may be interleaved differently, so the two lists are
+        // walked in lock step and only the fields that do not line up are set aside, each waiting
+        // for the other list to produce the next field of its name.
         if lhs.fields.count != rhs.fields.count {
             return false
         }
-        // Fast path: field lists that were built the same way carry their fields in the same
-        // order, so a single lock step walk usually settles it. Element wise equality is
-        // sufficient, but not necessary, for the definition above, so a mismatch only means the
-        // general comparison below has to run.
-        if lhs.fields.elementsEqual(rhs.fields) {
-            return true
-        }
-        for position in lhs.fields.indices {
-            let name = lhs.fields[position].name.canonicalName
-            if lhs.firstIndex(ofCanonicalName: name) != position {
-                // Not the first field with this name; its run was compared already.
-                continue
-            }
-            var leftIndex: Int? = position
-            var rightIndex = rhs.firstIndex(ofCanonicalName: name)
-            while let left = leftIndex, let right = rightIndex {
-                if lhs.fields[left] != rhs.fields[right] {
+        // The positions of the fields on either side whose partner on the other side has not
+        // turned up yet. Positions rather than the fields themselves, so that setting one aside
+        // does not retain its name and value. Both stay empty for as long as the two lists agree,
+        // which is the usual case, so comparing two lists in the same order does not allocate.
+        //
+        // Each pass below either sets one field aside or pairs one off on each side, so the two
+        // hold the same number of fields once a pass finishes, and one of them being empty means
+        // both are.
+        var pendingLeft = [Int]()
+        var pendingRight = [Int]()
+        for index in lhs.fields.indices {
+            if pendingLeft.isEmpty {
+                if lhs.fields[index] == rhs.fields[index] {
+                    // Neither side is owed a field, so these two are each other's partner.
+                    continue
+                }
+                if lhs.fields[index].name == rhs.fields[index].name {
+                    // Same reasoning, so these two had to be equal and the lists are not.
                     return false
                 }
-                leftIndex = lhs.firstIndex(ofCanonicalName: name, from: left + 1)
-                rightIndex = rhs.firstIndex(ofCanonicalName: name, from: right + 1)
+                // About to set a field aside. Neither side can set aside more than one field per
+                // position it has left, so reserving that much now is enough for the rest of the
+                // comparison and the two never have to grow.
+                let remaining = lhs.fields.count - index
+                pendingLeft.reserveCapacity(remaining)
+                pendingRight.reserveCapacity(remaining)
             }
-            if (leftIndex == nil) != (rightIndex == nil) {
-                // One of the two runs of this name is longer than the other.
-                return false
+            // The n-th field of a name on one side can only ever pair with the n-th field of that
+            // name on the other, so a disagreement here settles the whole comparison.
+            let leftName = lhs.fields[index].name
+            if let match = pendingRight.firstIndex(where: { rhs.fields[$0].name == leftName }) {
+                if rhs.fields[pendingRight[match]] != lhs.fields[index] {
+                    return false
+                }
+                pendingRight.remove(at: match)
+            } else {
+                pendingLeft.append(index)
+            }
+            let rightName = rhs.fields[index].name
+            if let match = pendingLeft.firstIndex(where: { lhs.fields[$0].name == rightName }) {
+                if lhs.fields[pendingLeft[match]] != rhs.fields[index] {
+                    return false
+                }
+                pendingLeft.remove(at: match)
+            } else {
+                pendingRight.append(index)
             }
         }
-        return true
+        // Every field was either paired off or is still waiting for a partner that never came.
+        return pendingLeft.isEmpty && pendingRight.isEmpty
     }
 }
 
