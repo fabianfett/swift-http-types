@@ -220,9 +220,10 @@ func registerHTTPFieldsScalingBenchmarks() {
 
     // MARK: - All distinct names, reversed
 
-    // Every field has a name of its own, so reversing the list displaces all of them. This is the
-    // one shape where indexing by name has a chance against the lock step walk, and it is not a
-    // shape real HTTP messages take — it is here to locate the crossover, not to be representative.
+    // Every field has a unique name. Reversing the list displaces all of them. This test case
+    // represents the worst case for a lock-step implementation. It is worse than the cookie based
+    // `HTTPFields.==-equal-differentOrder-N`, since the latter heavily depends on cookies being
+    // in the correct order.
     for distinctNameCase in distinctNameCases {
         let n = distinctNameCase.n
         let pair = distinctNameCase.sortedAgainstReversed
