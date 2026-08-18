@@ -35,7 +35,7 @@ func registerHTTPFieldsScalingBenchmarks() {
 
         // MARK: contains
 
-        // Measured with a large scaling factor because a single call is too cheap to resolve against
+        // Measured with a `kilo` scaling factor because a single call is too cheap to resolve against
         // the measurement overhead. Note that package-benchmark divides the reported numbers by the
         // scaling factor, so they stay comparable to the benchmarks below.
         Benchmark(
@@ -110,8 +110,6 @@ func registerHTTPFieldsScalingBenchmarks() {
 
         // MARK: Equality
 
-        // Both sides of every pair were built independently rather than copied from one another, so
-        // equality always has to do the real comparison.
         let equalSameOrder = scalingCase.equalSameOrder
         Benchmark(
             "HTTPFields.==-equal-sameOrder-N=\(n)",
@@ -122,6 +120,8 @@ func registerHTTPFieldsScalingBenchmarks() {
             }
         }
 
+        // This test reorders the elements in such a way that the distance between elements is large.
+        // Its purpose is to display the worst performance when doing a lock-step equality check.
         let equalDifferentOrder = scalingCase.equalDifferentOrder
         Benchmark(
             "HTTPFields.==-equal-differentOrder-N=\(n)",
@@ -132,10 +132,9 @@ func registerHTTPFieldsScalingBenchmarks() {
             }
         }
 
-        // `equalDifferentOrder` reorders as much of the list as it can, which is the worst case.
-        // This one is the common case it has to be read against: the two lists agree everywhere
-        // except for a single field that sits a few slots off, and how many fields are out of step
-        // does not grow with N.
+        // This test compares two fields that have the same order, except for a single field that
+        // sits a few slots off. Its purpose is to show the benefits of a lock-step equality check,
+        // compared to a full blown dictionary equality check.
         let equalLocallyDisplaced = scalingCase.equalLocallyDisplaced
         Benchmark(
             "HTTPFields.==-equal-locallyDisplaced-N=\(n)",
@@ -163,30 +162,6 @@ func registerHTTPFieldsScalingBenchmarks() {
         ) { benchmark in
             for _ in benchmark.scaledIterations {
                 blackHole(mismatchDifferentOrder.lhs == mismatchDifferentOrder.rhs)
-            }
-        }
-
-        // MARK: Equality, dictionary based alternative
-
-        // `equalAlternative` answers the same question as `==` by indexing one side by name and
-        // draining that index, instead of walking both sides in lock step. Registered over exactly
-        // the pairs used above so the two can be read off against each other; the fixtures assert
-        // that they agree on every one of them.
-        let alternativePairs: [(String, FieldsPair)] = [
-            ("equal-sameOrder", equalSameOrder),
-            ("equal-differentOrder", equalDifferentOrder),
-            ("equal-locallyDisplaced", equalLocallyDisplaced),
-            ("differsAt80%-sameOrder", mismatchSameOrder),
-            ("differsAt80%-differentOrder", mismatchDifferentOrder),
-        ]
-        for (label, pair) in alternativePairs {
-            Benchmark(
-                "HTTPFields.equalAlternative-\(label)-N=\(n)",
-                configuration: makeDefaultConfiguration()
-            ) { benchmark in
-                for _ in benchmark.scaledIterations {
-                    blackHole(pair.lhs.equalAlternative(to: pair.rhs))
-                }
             }
         }
 

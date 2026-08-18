@@ -19,14 +19,10 @@ import HTTPTypes
 /// Field lists of increasing size, used to measure how `HTTPFields` operations scale.
 ///
 /// The lists are nested: every list is a prefix of the next larger one, so a difference between two
-/// sizes is only ever caused by the fields that were added, never by the fields that were already
-/// there.
+/// sizes is only ever caused by the fields that were added.
 ///
 /// Real field lists grow past ~16 fields almost exclusively because of cookies, so that is how these
-/// grow too: the ordinary headers stop at 16 and everything beyond that is a `Cookie` field. The two
-/// sizes therefore vary independently — the total number of fields keeps growing while the number of
-/// distinct names does not — and comparing the small sizes against the large ones shows which of the
-/// two a given operation is sensitive to.
+/// grow too: the ordinary headers stop at 16 and everything beyond that is a `Cookie` field.
 
 /// `Cookie` fields with distinct values, so that no two fields in a list compare equal.
 private func cookieFields(_ range: Range<Int>) -> [HTTPField] {
@@ -77,20 +73,13 @@ let scalingFields128: [HTTPField] = scalingFields64 + cookieFields(48..<112)
 
 // MARK: - Building
 
-/// Builds an `HTTPFields` by appending, which is how one is built on a receive path.
-///
-/// Fixtures that are compared against each other are always built by two separate calls to this
-/// function, never by copying one into the other, so that the two values are genuinely distinct and
-/// equality cannot take a shortcut for two copies of the same value.
-private func makeFields(_ fields: [HTTPField]) -> HTTPFields {
+/// Create a ``HTTPFields`` from an ``[HTTPField]`` array. We ensure that the resulting
+/// ``HTTPFields`` is backed by an array that is not a copied referenced to the input array.
+private func makeFieldsByRebuild(_ fields: [HTTPField]) -> HTTPFields {
     var result = HTTPFields()
+    result.reserveCapacity(fields.count)
     for field in fields {
         result.append(field)
-    }
-    // Read the value once before handing it out, so that any work `HTTPFields` defers until its
-    // first read is not charged to whichever benchmark happens to run first.
-    if let first = fields.first {
-        precondition(result.contains(first.name))
     }
     return result
 }
@@ -189,22 +178,22 @@ struct ScalingCase: Sendable {
         self.n = fields.count
         self.cookieCount = fields.filter { $0.name == .cookie }.count
         self.fields = fields
-        self.readFields = makeFields(fields)
+        self.readFields = makeFieldsByRebuild(fields)
 
         let mismatched = withLateMismatch(fields)
-        self.equalSameOrder = FieldsPair(lhs: makeFields(fields), rhs: makeFields(fields))
+        self.equalSameOrder = FieldsPair(lhs: makeFieldsByRebuild(fields), rhs: makeFieldsByRebuild(fields))
         self.equalDifferentOrder = FieldsPair(
-            lhs: makeFields(fields),
-            rhs: makeFields(reorderingUniqueNames(fields))
+            lhs: makeFieldsByRebuild(fields),
+            rhs: makeFieldsByRebuild(reorderingUniqueNames(fields))
         )
         self.equalLocallyDisplaced = FieldsPair(
-            lhs: makeFields(fields),
-            rhs: makeFields(displacingOneField(fields))
+            lhs: makeFieldsByRebuild(fields),
+            rhs: makeFieldsByRebuild(displacingOneField(fields))
         )
-        self.mismatchSameOrder = FieldsPair(lhs: makeFields(fields), rhs: makeFields(mismatched))
+        self.mismatchSameOrder = FieldsPair(lhs: makeFieldsByRebuild(fields), rhs: makeFieldsByRebuild(mismatched))
         self.mismatchDifferentOrder = FieldsPair(
-            lhs: makeFields(fields),
-            rhs: makeFields(reorderingUniqueNames(mismatched))
+            lhs: makeFieldsByRebuild(fields),
+            rhs: makeFieldsByRebuild(reorderingUniqueNames(mismatched))
         )
     }
 }
@@ -220,20 +209,11 @@ let scalingCases: [ScalingCase] = [
 // MARK: - All distinct names
 
 /// A field list of `count` fields whose names are all distinct: `n1` through `n<count>`.
-///
-/// The lists above are cookie heavy on purpose, because cookies are why real field lists grow past
-/// ~16 fields. This one is the opposite shape, and it is not a realistic HTTP message: because no two
-/// fields share a name, reordering it displaces *every* field rather than only the handful that have
-/// a name of their own. That makes it the worst case for comparing two lists in lock step, and the
-/// best case for indexing one of them by name, so it is where the two approaches can be told apart.
 private func distinctNameFields(_ count: Int) -> [HTTPField] {
     (1...count).map { HTTPField(name: name("n\($0)"), value: "value\($0)-aBcDeF0123456789") }
 }
 
 /// Distinctly named fields against the same fields in the opposite order.
-///
-/// The two are equal: no two fields share a name, so no same-name ordering can be violated and any
-/// permutation of the list equals the list.
 struct DistinctNameCase: Sendable {
     /// The number of fields, which is also the number of distinct names.
     let n: Int
@@ -244,8 +224,8 @@ struct DistinctNameCase: Sendable {
         let fields = distinctNameFields(count)
         self.n = count
         self.sortedAgainstReversed = FieldsPair(
-            lhs: makeFields(fields),
-            rhs: makeFields(fields.reversed())
+            lhs: makeFieldsByRebuild(fields),
+            rhs: makeFieldsByRebuild(fields.reversed())
         )
     }
 }
