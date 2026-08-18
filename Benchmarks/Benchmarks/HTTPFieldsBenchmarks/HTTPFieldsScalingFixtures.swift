@@ -101,21 +101,10 @@ private func reorderingUniqueNames(_ fields: [HTTPField]) -> [HTTPField] {
     return fields.map { $0.name == .cookie ? $0 : reversed.next()! }
 }
 
-/// How far a locally displaced field moves. A small constant rather than a fraction of the list, so
-/// that the same absolute edit is made at every size and the curve over N shows how equality scales
-/// when the two lists are out of step by a bounded amount.
+/// How far a locally displaced field moves.
 private let localDisplacementDistance = 3
 
 /// Moves the first field a few slots later, leaving every other field where it was.
-///
-/// This is the realistic way two equal field lists come to be ordered differently: a proxy or a
-/// second encoder emits one header at a slightly different point in the list. `reorderingUniqueNames`
-/// is the opposite extreme, and the two bracket what equality has to cope with.
-///
-/// The field that moves has a name no other field in any of these lists shares, and it only jumps
-/// over fields with other names, so the relative order of same-named fields is untouched and the
-/// result is still equal to the input. Because the lists are nested, the fields involved are the same
-/// at every size.
 private func displacingOneField(_ fields: [HTTPField]) -> [HTTPField] {
     precondition(fields.count > localDisplacementDistance, "list too short to displace a field within")
     var fields = fields
@@ -157,10 +146,7 @@ struct ScalingCase: Sendable {
     let equalSameOrder: FieldsPair
     /// Equal, but with the uniquely named fields appended in the opposite order.
     let equalDifferentOrder: FieldsPair
-    /// Equal, but with one field appended a few slots away from where the other side has it. The
-    /// number of displaced fields does not grow with `n`, so an equality that only pays for the
-    /// fields that are actually out of step stays near-linear over this pair while
-    /// `equalDifferentOrder` does not.
+    /// Equal, but with one field appended a few slots away from where the other side has it.
     let equalLocallyDisplaced: FieldsPair
     /// Unequal: the leading 80% is identical and in the same order, the field at 80% differs.
     ///
@@ -292,8 +278,8 @@ func validateScalingFixtures() {
             )
         }
 
-        // The locally displaced pair only measures what it claims to if exactly one field moved, and
-        // by the expected distance. Anything else and the "bounded displacement" curve is not that.
+        // The locally displaced pair only measures if exactly one field moved within two fields
+        // that are otherwise equal and in exactly the same order.
         let displaced = scalingCase.equalLocallyDisplaced
         let movedPositions = zip(Array(displaced.lhs), Array(displaced.rhs)).enumerated()
             .filter { $0.element.0 != $0.element.1 }
@@ -308,9 +294,6 @@ func validateScalingFixtures() {
         let n = distinctNameCase.n
         let pair = distinctNameCase.sortedAgainstReversed
         precondition(pair.lhs.count == n && pair.rhs.count == n, "distinct N=\(n): wrong field count")
-        // The point of this fixture is that no two fields share a name, which is what makes the
-        // reversal displace every field. If a name repeated, the reversal would break the order of
-        // that name's fields and the pair would be unequal rather than reordered.
         precondition(Set(pair.lhs.map(\.name)).count == n, "distinct N=\(n): names are not all distinct")
         precondition(pair.lhs == pair.rhs, "distinct N=\(n): not equal")
         precondition(
